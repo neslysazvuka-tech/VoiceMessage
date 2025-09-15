@@ -247,6 +247,7 @@
             width: 100%;
             margin-top: 5px;
             outline: none;
+            height: 40px;
         }
         
         .audio-player::-webkit-media-controls-panel {
@@ -324,6 +325,24 @@
         .messages-section::-webkit-scrollbar-thumb:hover {
             background: #6e8efb;
         }
+
+        .notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 15px;
+            background: #ff5f5f;
+            color: white;
+            border-radius: 5px;
+            box-shadow: 0 3px 10px rgba(0,0,0,0.2);
+            transform: translateX(100%);
+            transition: transform 0.3s ease;
+            z-index: 1000;
+        }
+        
+        .notification.show {
+            transform: translateX(0);
+        }
     </style>
 </head>
 <body>
@@ -371,6 +390,8 @@
         </div>
     </div>
 
+    <div class="notification" id="notification"></div>
+
     <!-- Firebase App (основа Firebase SDK) -->
     <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
     <!-- Firebase Realtime Database -->
@@ -391,7 +412,7 @@
         };
 
         // Инициализация Firebase
-        firebase.initializeApp(firebaseConfig);
+        const app = firebase.initializeApp(firebaseConfig);
         const database = firebase.database();
         const storage = firebase.storage();
 
@@ -404,6 +425,7 @@
         const messagesContainer = document.getElementById('messages-container');
         const noMessages = document.getElementById('no-messages');
         const onlineCountElement = document.getElementById('online-count');
+        const notification = document.getElementById('notification');
 
         // Переменные состояния
         let mediaRecorder;
@@ -414,6 +436,18 @@
         let currentUsername = '';
         let userId = generateUserId();
         let lastActivityTime = Date.now();
+        let messageListeners = {};
+
+        // Функция показа уведомлений
+        function showNotification(message, isError = false) {
+            notification.textContent = message;
+            notification.style.background = isError ? '#ff5f5f' : '#6e8efb';
+            notification.classList.add('show');
+            
+            setTimeout(() => {
+                notification.classList.remove('show');
+            }, 3000);
+        }
 
         // Генерация уникального ID пользователя
         function generateUserId() {
@@ -427,6 +461,8 @@
                 database.ref('users/' + userId).set({
                     username: currentUsername,
                     lastActivity: lastActivityTime
+                }).catch(error => {
+                    console.error('Ошибка обновления активности:', error);
                 });
             }
         }
@@ -447,6 +483,8 @@
                 }
                 
                 onlineCountElement.textContent = onlineCount;
+            }, (error) => {
+                console.error('Ошибка отслеживания пользователей:', error);
             });
         }
 
@@ -466,7 +504,7 @@
         // Запись аудио
         recordBtn.addEventListener('click', async () => {
             if (!currentUsername) {
-                alert('Пожалуйста, введите имя пользователя');
+                showNotification('Пожалуйста, введите имя пользователя', true);
                 usernameInput.focus();
                 return;
             }
@@ -494,26 +532,31 @@
                         const timestamp = Date.now();
                         const audioFileName = `audio_${userId}_${timestamp}.webm`;
                         
-                        // Загрузка в Firebase Storage
-                        const audioRef = storage.ref().child(audioFileName);
-                        await audioRef.put(audioBlob);
-                        
-                        // Получение URL аудио
-                        const audioURL = await audioRef.getDownloadURL();
-                        
-                        // Сохранение информации о сообщении в базе данных
-                        database.ref('messages').push({
-                            userId: userId,
-                            username: currentUsername,
-                            audioURL: audioURL,
-                            timestamp: timestamp
-                        });
+                        try {
+                            // Загрузка в Firebase Storage
+                            const audioRef = storage.ref().child(audioFileName);
+                            await audioRef.put(audioBlob);
+                            
+                            // Получение URL аудио
+                            const audioURL = await audioRef.getDownloadURL();
+                            
+                            // Сохранение информации о сообщении в базе данных
+                            await database.ref('messages').push({
+                                userId: userId,
+                                username: currentUsername,
+                                audioURL: audioURL,
+                                timestamp: timestamp
+                            });
+                            
+                            showNotification('Сообщение отправлено!');
+                            
+                        } catch (error) {
+                            console.error('Ошибка загрузки аудио:', error);
+                            showNotification('Ошибка отправки сообщения', true);
+                        }
                         
                         // Освобождение ресурсов микрофона
                         stream.getTracks().forEach(track => track.stop());
-                        
-                        // Обновление активности
-                        updateLastActivity();
                     };
                     
                     // Начало записи
@@ -536,7 +579,7 @@
                     
                 } catch (error) {
                     console.error('Ошибка доступа к микрофону:', error);
-                    alert('Не удалось получить доступ к микрофону. Проверьте разрешения браузера.');
+                    showNotification('Не удалось получить доступ к микрофону', true);
                 }
             } else {
                 stopRecording();
@@ -562,67 +605,84 @@
         }
 
         // Отображение сообщений
-        database.ref('messages').on('child_added', (snapshot) => {
-            const message = snapshot.val();
-            const messageId = snapshot.key;
-            
-            // Создание элемента сообщения
-            const messageElement = document.createElement('div');
-            messageElement.classList.add('message');
-            
-            // Определение, является ли сообщение своим
-            if (message.userId === userId) {
-                messageElement.classList.add('own');
-            }
-            
-            // Форматирование времени
-            const messageTime = new Date(message.timestamp);
-            const formattedTime = `${messageTime.getHours().toString().padStart(2, '0')}:${messageTime.getMinutes().toString().padStart(2, '0')}`;
-            
-            // Создание HTML для сообщения
-            messageElement.innerHTML = `
-                <div class="message-avatar">${message.username.charAt(0).toUpperCase()}</div>
-                <div class="message-content">
-                    <div class="message-username">${message.username}</div>
-                    <audio class="audio-player" controls>
-                        <source src="${message.audioURL}" type="audio/webm">
-                        Ваш браузер не поддерживает аудио элемент.
-                    </audio>
-                    <div class="message-time">${formattedTime}</div>
-                </div>
-            `;
-            
-            // Добавление сообщения в контейнер
-            messagesContainer.appendChild(messageElement);
-            
-            // Прокрутка к последнему сообщению
-            messagesContainer.scrollTop = messagesContainer.scrollHeight;
-            
-            // Скрытие сообщения о отсутствии сообщений
-            noMessages.style.display = 'none';
-            
-            // Установка таймера удаления сообщения (3 минуты)
-            setTimeout(() => {
-                const elementToRemove = document.querySelector(`[data-id="${messageId}"]`);
-                if (elementToRemove) {
-                    elementToRemove.remove();
+        function setupMessageListener() {
+            database.ref('messages').on('child_added', (snapshot) => {
+                const message = snapshot.val();
+                const messageId = snapshot.key;
+                
+                // Проверяем, не отображается ли уже это сообщение
+                if (messageListeners[messageId]) return;
+                messageListeners[messageId] = true;
+                
+                // Создание элемента сообщения
+                const messageElement = document.createElement('div');
+                messageElement.classList.add('message');
+                messageElement.setAttribute('data-id', messageId);
+                
+                // Определение, является ли сообщение своим
+                if (message.userId === userId) {
+                    messageElement.classList.add('own');
                 }
                 
-                // Проверка, есть ли еще сообщения
-                if (messagesContainer.children.length === 0) {
-                    noMessages.style.display = 'block';
-                }
+                // Форматирование времени
+                const messageTime = new Date(message.timestamp);
+                const formattedTime = `${messageTime.getHours().toString().padStart(2, '0')}:${messageTime.getMinutes().toString().padStart(2, '0')}`;
                 
-                // Удаление из базы данных
-                database.ref('messages/' + messageId).remove();
+                // Создание HTML для сообщения
+                messageElement.innerHTML = `
+                    <div class="message-avatar">${message.username.charAt(0).toUpperCase()}</div>
+                    <div class="message-content">
+                        <div class="message-username">${message.username}</div>
+                        <audio class="audio-player" controls>
+                            <source src="${message.audioURL}" type="audio/webm">
+                            Ваш браузер не поддерживает аудио элемент.
+                        </audio>
+                        <div class="message-time">${formattedTime}</div>
+                    </div>
+                `;
                 
-                // Удаление из Storage
-                const audioRef = storage.refFromURL(message.audioURL);
-                audioRef.delete().catch(error => {
-                    console.error('Ошибка удаления аудио:', error);
-                });
-            }, 3 * 60 * 1000); // 3 минуты
-        });
+                // Добавление сообщения в контейнер
+                messagesContainer.appendChild(messageElement);
+                
+                // Прокрутка к последнему сообщению
+                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                
+                // Скрытие сообщения о отсутствии сообщений
+                noMessages.style.display = 'none';
+                
+                // Установка таймера удаления сообщения (3 минуты)
+                setTimeout(() => {
+                    const elementToRemove = document.querySelector(`[data-id="${messageId}"]`);
+                    if (elementToRemove) {
+                        elementToRemove.remove();
+                    }
+                    
+                    // Удаление из слушателей
+                    delete messageListeners[messageId];
+                    
+                    // Проверка, есть ли еще сообщения
+                    if (messagesContainer.querySelectorAll('.message').length === 0) {
+                        noMessages.style.display = 'block';
+                    }
+                    
+                    // Удаление из базы данных
+                    database.ref('messages/' + messageId).remove().catch(error => {
+                        console.error('Ошибка удаления сообщения:', error);
+                    });
+                    
+                    // Удаление из Storage
+                    if (message.audioURL) {
+                        const audioRef = storage.refFromURL(message.audioURL);
+                        audioRef.delete().catch(error => {
+                            console.error('Ошибка удаления аудио:', error);
+                        });
+                    }
+                }, 3 * 60 * 1000); // 3 минуты
+            }, (error) => {
+                console.error('Ошибка загрузки сообщений:', error);
+                showNotification('Ошибка загрузки сообщений', true);
+            });
+        }
 
         // Отслеживание неактивных пользователей
         setInterval(() => {
@@ -632,15 +692,37 @@
                 if (users) {
                     for (let id in users) {
                         if (now - users[id].lastActivity > 7 * 60 * 1000) {
-                            database.ref('users/' + id).remove();
+                            database.ref('users/' + id).remove().catch(error => {
+                                console.error('Ошибка удаления пользователя:', error);
+                            });
                         }
                     }
                 }
             });
         }, 60000); // Проверка каждую минуту
 
-        // Инициализация отслеживания онлайн пользователей
-        trackOnlineUsers();
+        // Инициализация приложения
+        function initApp() {
+            try {
+                // Инициализация отслеживания онлайн пользователей
+                trackOnlineUsers();
+                
+                // Настройка слушателя сообщений
+                setupMessageListener();
+                
+                // Обновление активности при взаимодействии с интерфейсом
+                document.addEventListener('click', updateLastActivity);
+                document.addEventListener('keydown', updateLastActivity);
+                
+                showNotification('Приложение готово к использованию!');
+            } catch (error) {
+                console.error('Ошибка инициализации приложения:', error);
+                showNotification('Ошибка инициализации приложения', true);
+            }
+        }
+
+        // Запуск приложения после загрузки
+        window.addEventListener('load', initApp);
     </script>
 </body>
 </html>
