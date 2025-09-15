@@ -343,6 +343,19 @@
         .notification.show {
             transform: translateX(0);
         }
+        
+        .debug-panel {
+            position: fixed;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 12px;
+            max-width: 300px;
+            display: none;
+        }
     </style>
 </head>
 <body>
@@ -391,6 +404,7 @@
     </div>
 
     <div class="notification" id="notification"></div>
+    <div class="debug-panel" id="debug-panel"></div>
 
     <!-- Firebase App (основа Firebase SDK) -->
     <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
@@ -426,6 +440,7 @@
         const noMessages = document.getElementById('no-messages');
         const onlineCountElement = document.getElementById('online-count');
         const notification = document.getElementById('notification');
+        const debugPanel = document.getElementById('debug-panel');
 
         // Переменные состояния
         let mediaRecorder;
@@ -449,6 +464,12 @@
             }, 3000);
         }
 
+        // Функция отладки
+        function debugLog(message) {
+            debugPanel.style.display = 'block';
+            debugPanel.innerHTML = message + '<br>' + debugPanel.innerHTML;
+        }
+
         // Генерация уникального ID пользователя
         function generateUserId() {
             return 'user_' + Math.random().toString(36).substr(2, 9);
@@ -463,6 +484,7 @@
                     lastActivity: lastActivityTime
                 }).catch(error => {
                     console.error('Ошибка обновления активности:', error);
+                    debugLog('Ошибка обновления активности: ' + error.message);
                 });
             }
         }
@@ -485,6 +507,7 @@
                 onlineCountElement.textContent = onlineCount;
             }, (error) => {
                 console.error('Ошибка отслеживания пользователей:', error);
+                debugLog('Ошибка отслеживания пользователей: ' + error.message);
             });
         }
 
@@ -549,10 +572,12 @@
                             });
                             
                             showNotification('Сообщение отправлено!');
+                            debugLog('Аудио сообщение отправлено: ' + audioURL);
                             
                         } catch (error) {
                             console.error('Ошибка загрузки аудио:', error);
                             showNotification('Ошибка отправки сообщения', true);
+                            debugLog('Ошибка загрузки аудио: ' + error.message);
                         }
                         
                         // Освобождение ресурсов микрофона
@@ -580,6 +605,7 @@
                 } catch (error) {
                     console.error('Ошибка доступа к микрофону:', error);
                     showNotification('Не удалось получить доступ к микрофону', true);
+                    debugLog('Ошибка доступа к микрофону: ' + error.message);
                 }
             } else {
                 stopRecording();
@@ -650,6 +676,8 @@
                 // Скрытие сообщения о отсутствии сообщений
                 noMessages.style.display = 'none';
                 
+                debugLog('Сообщение получено: ' + message.audioURL);
+                
                 // Установка таймера удаления сообщения (3 минуты)
                 setTimeout(() => {
                     const elementToRemove = document.querySelector(`[data-id="${messageId}"]`);
@@ -668,6 +696,7 @@
                     // Удаление из базы данных
                     database.ref('messages/' + messageId).remove().catch(error => {
                         console.error('Ошибка удаления сообщения:', error);
+                        debugLog('Ошибка удаления сообщения: ' + error.message);
                     });
                     
                     // Удаление из Storage
@@ -675,12 +704,16 @@
                         const audioRef = storage.refFromURL(message.audioURL);
                         audioRef.delete().catch(error => {
                             console.error('Ошибка удаления аудио:', error);
+                            debugLog('Ошибка удаления аудио: ' + error.message);
                         });
                     }
+                    
+                    debugLog('Сообщение удалено: ' + messageId);
                 }, 3 * 60 * 1000); // 3 минуты
             }, (error) => {
                 console.error('Ошибка загрузки сообщений:', error);
                 showNotification('Ошибка загрузки сообщений', true);
+                debugLog('Ошибка загрузки сообщений: ' + error.message);
             });
         }
 
@@ -694,6 +727,7 @@
                         if (now - users[id].lastActivity > 7 * 60 * 1000) {
                             database.ref('users/' + id).remove().catch(error => {
                                 console.error('Ошибка удаления пользователя:', error);
+                                debugLog('Ошибка удаления пользователя: ' + error.message);
                             });
                         }
                     }
@@ -715,9 +749,11 @@
                 document.addEventListener('keydown', updateLastActivity);
                 
                 showNotification('Приложение готово к использованию!');
+                debugLog('Приложение инициализировано. ID пользователя: ' + userId);
             } catch (error) {
                 console.error('Ошибка инициализации приложения:', error);
                 showNotification('Ошибка инициализации приложения', true);
+                debugLog('Ошибка инициализации приложения: ' + error.message);
             }
         }
 
