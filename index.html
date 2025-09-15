@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Голосовой Чат</title>
+    <title>Голосовой Чат (без Storage)</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         * {
@@ -361,8 +361,8 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>Голосовой Чат</h1>
-            <p>Общайтесь голосовыми сообщениями</p>
+            <h1>Голосовой Чат (без Storage)</h1>
+            <p>Аудио сохраняется прямо в базе данных</p>
             <div class="online-count">
                 <i class="fas fa-users"></i>
                 <span id="online-count">0</span>
@@ -410,8 +410,6 @@
     <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
     <!-- Firebase Realtime Database -->
     <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-database-compat.js"></script>
-    <!-- Firebase Storage -->
-    <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-storage-compat.js"></script>
 
     <script>
         // Ваша конфигурация Firebase
@@ -428,7 +426,6 @@
         // Инициализация Firebase
         const app = firebase.initializeApp(firebaseConfig);
         const database = firebase.database();
-        const storage = firebase.storage();
 
         // Элементы DOM
         const usernameInput = document.getElementById('username-input');
@@ -535,7 +532,14 @@
             if (!isRecording) {
                 try {
                     // Запрос разрешения на использование микрофона
-                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    const stream = await navigator.mediaDevices.getUserMedia({ 
+                        audio: {
+                            channelCount: 1,
+                            sampleRate: 16000,
+                            sampleSize: 16,
+                            volume: 1.0
+                        } 
+                    });
                     
                     // Создание MediaRecorder
                     mediaRecorder = new MediaRecorder(stream);
@@ -549,36 +553,34 @@
                     // Окончание записи
                     mediaRecorder.onstop = async () => {
                         // Создание Blob из записанных данных
-                        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                        const audioBlob = new Blob(audioChunks, { type: 'audio/webm;codecs=opus' });
                         
-                        // Генерация имени файла
-                        const timestamp = Date.now();
-                        const audioFileName = `audio_${userId}_${timestamp}.webm`;
+                        // Конвертация Blob в base64
+                        const reader = new FileReader();
+                        reader.readAsDataURL(audioBlob);
                         
-                        try {
-                            // Загрузка в Firebase Storage
-                            const audioRef = storage.ref().child(audioFileName);
-                            await audioRef.put(audioBlob);
+                        reader.onloadend = async () => {
+                            const base64Audio = reader.result;
+                            const timestamp = Date.now();
                             
-                            // Получение URL аудио
-                            const audioURL = await audioRef.getDownloadURL();
-                            
-                            // Сохранение информации о сообщении в базе данных
-                            await database.ref('messages').push({
-                                userId: userId,
-                                username: currentUsername,
-                                audioURL: audioURL,
-                                timestamp: timestamp
-                            });
-                            
-                            showNotification('Сообщение отправлено!');
-                            debugLog('Аудио сообщение отправлено: ' + audioURL);
-                            
-                        } catch (error) {
-                            console.error('Ошибка загрузки аудио:', error);
-                            showNotification('Ошибка отправки сообщения', true);
-                            debugLog('Ошибка загрузки аудио: ' + error.message);
-                        }
+                            try {
+                                // Сохранение информации о сообщении в базе данных
+                                await database.ref('messages').push({
+                                    userId: userId,
+                                    username: currentUsername,
+                                    audioData: base64Audio,
+                                    timestamp: timestamp
+                                });
+                                
+                                showNotification('Сообщение отправлено!');
+                                debugLog('Аудио сообщение отправлено (base64)');
+                                
+                            } catch (error) {
+                                console.error('Ошибка отправки сообщения:', error);
+                                showNotification('Ошибка отправки сообщения', true);
+                                debugLog('Ошибка отправки сообщения: ' + error.message);
+                            }
+                        };
                         
                         // Освобождение ресурсов микрофона
                         stream.getTracks().forEach(track => track.stop());
@@ -660,7 +662,7 @@
                     <div class="message-content">
                         <div class="message-username">${message.username}</div>
                         <audio class="audio-player" controls>
-                            <source src="${message.audioURL}" type="audio/webm">
+                            <source src="${message.audioData}" type="audio/webm">
                             Ваш браузер не поддерживает аудио элемент.
                         </audio>
                         <div class="message-time">${formattedTime}</div>
@@ -676,7 +678,7 @@
                 // Скрытие сообщения о отсутствии сообщений
                 noMessages.style.display = 'none';
                 
-                debugLog('Сообщение получено: ' + message.audioURL);
+                debugLog('Сообщение получено: ' + messageId);
                 
                 // Установка таймера удаления сообщения (3 минуты)
                 setTimeout(() => {
@@ -698,15 +700,6 @@
                         console.error('Ошибка удаления сообщения:', error);
                         debugLog('Ошибка удаления сообщения: ' + error.message);
                     });
-                    
-                    // Удаление из Storage
-                    if (message.audioURL) {
-                        const audioRef = storage.refFromURL(message.audioURL);
-                        audioRef.delete().catch(error => {
-                            console.error('Ошибка удаления аудио:', error);
-                            debugLog('Ошибка удаления аудио: ' + error.message);
-                        });
-                    }
                     
                     debugLog('Сообщение удалено: ' + messageId);
                 }, 3 * 60 * 1000); // 3 минуты
